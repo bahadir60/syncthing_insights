@@ -12,7 +12,7 @@ Needed Highchart scripts not downloaded and added to `vendor`, instead it uses i
 
 ## Demo Video 
 
-[![Insights Video](https://www.youtube.com/watch?v=iM4kd8Gzet8&feature=youtu.be)]
+(https://www.youtube.com/watch?v=iM4kd8Gzet8&feature=youtu.be)
 
 ## License
 
