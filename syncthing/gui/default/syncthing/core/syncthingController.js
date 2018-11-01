@@ -52,6 +52,8 @@ angular.module('syncthing.core')
         $scope.metricRates = false;
         $scope.folderPathErrors = {};
         $scope.currentFolder = {};
+        var dataInpbs = [];
+        var dataOutpbs = [];
         resetRemoteNeed();
 
         try {
@@ -521,6 +523,7 @@ angular.module('syncthing.core')
                     data.total.outbps = 0;
                 }
                 $scope.connectionsTotal = data.total;
+                getDownloadUploadRate($scope.connectionsTotal.inbps, $scope.connectionsTotal.outbps);
 
                 data = data.connections;
                 for (id in data) {
@@ -717,6 +720,7 @@ angular.module('syncthing.core')
             refreshDiscoveryCache();
             refreshConnectionStats();
             refreshErrors();
+            refreshHighCharts();
         };
 
         $scope.folderStatus = function (folderCfg) {
@@ -2367,5 +2371,410 @@ angular.module('syncthing.core')
                 $scope.config.options.unackedNotificationIDs.splice(idx, 1);
                 $scope.saveConfig();
             }
+        };
+
+        function refreshHighCharts(){
+            getFolderInfo();
+            remoteDevicesData();
+        };
+
+        function getFolderInfo(){
+            var model = $scope.model;
+            var folders = $scope.folders;
+            var keys = [];
+            var filesGlobal = [];
+            var directoriesGlobal = [];
+            var filesLocal = [];
+            var directoriesLocal = [];
+            var outSync = [];
+            
+            Object.entries(model).forEach(entry => {
+                var key = entry[0];
+               
+                var n = $scope.neededItems(key);
+                outSync.push(n);
+
+                for (var f in folders){
+                    if (folders[f].id == key){
+                        key = (function () {if(folders[f].label){return folders[f].label}else{return folders[f].id}}());
+                    }
+                }
+                keys.push(key);
+    
+                var f = entry[1].globalFiles;
+                filesGlobal.push(f);
+                f = entry[1].localFiles;
+                filesLocal.push(f);
+                var d = entry[1].globalDirectories;
+                directoriesGlobal.push(d);
+                d = entry[1].localDirectories;
+                directoriesLocal.push(d);
+              });
+            
+            var totalLocalFiles = filesLocal.reduce((a, b) => a + b, 0);
+            var totalGlobalFiles = filesGlobal.reduce((a, b) => a + b, 0);
+            var totalLocalDirectories = directoriesLocal.reduce((a, b) => a + b, 0);
+            var totalGlobalDirectories = directoriesGlobal.reduce((a, b) => a + b, 0);
+            var totalOutSync = outSync.reduce((a, b) => a + b, 0);
+
+            keys.push("Total");
+            filesGlobal.push(totalGlobalFiles);
+            directoriesGlobal.push(totalGlobalDirectories);
+            filesLocal.push(totalLocalFiles);
+            directoriesLocal.push(totalLocalDirectories);
+            outSync.push(totalOutSync);
+
+            var series = [{"name": "Global Files", "data": filesGlobal},
+                {"name": "Global Directories", "data": directoriesGlobal},
+                {"name": "Local Files", "data": filesLocal},
+                {"name": "Local Directories", "data": directoriesLocal},
+                {"name": "Out of Sync", "data": outSync}];
+            
+            try {
+                window.localStorage['keys'] = JSON.stringify(keys);
+                window.localStorage['series'] = JSON.stringify(series);
+            } catch (exception) { }
+        };
+
+        function remoteDevicesData(){
+            var i = 1;
+            var parent = 1;
+            var ii = 1;
+            var data = [];
+            var devices = $scope.devices;
+            var folders = $scope.folders; 
+ 
+            data.push({'id': '0.0', 'parent': '', 'name': 'Remote Devices'});
+            
+            if (devices.length != 0){
+                for (var device in devices){
+                    if (devices[device].deviceID != $scope.myID){
+                        var dataInner = {'id': parent.toString().concat(".", i), 'parent': '0.0', 'name': (function () {if(devices[device].name && devices[device].name.length > 0){return devices[device].name}else{return devices[device].deviceID.substr(0, 6)}}())};
+                        data.push(dataInner);
+
+                        
+                        if ($scope.deviceFolders(devices[device]).length !== 0){
+                            var deviceFolders = $scope.deviceFolders(devices[device]);
+                            for (var folder in deviceFolders){
+                                for (var f in folders){
+                                    if (folders[f].id == deviceFolders[folder]){
+                                            var data2Inner = {'id': (parent+1).toString().concat(".", ii), 'parent': parent.toString().concat(".", i), 'name': (function () {if(folders[f].label){return folders[f].label}else{return folders[f].id}}()), 'value': 1};
+                                            data.push(data2Inner);
+                                            ii++;
+                                    }
+                                }
+                            }
+                        }
+                        i++;
+                    }
+                }
+            }
+            try {
+                window.localStorage['RemDev'] = JSON.stringify(data);
+            } catch (exception) { }
+        };
+
+        function getDownloadUploadRate(inbps, outbps){
+                
+                var timeNow = (new Date()).getTime(); // current time
+    
+                if (getLocalStorage('Inbps')){
+                    dataInpbs = getLocalStorage('Inbps');
+                }
+
+                if (getLocalStorage('Outbps')){
+                    dataOutpbs = getLocalStorage('Outbps');
+                }
+    
+                dataInpbs.push([timeNow, inbps]);
+                // Let the local storage store 30 min download rate,
+                // 30 x 60 / 10 = 180 ( 30 min, 60 sec, 10 sec refresh rate)
+                if (dataInpbs.length > 180){  
+                    dataInpbs.shift();
+                }
+                dataOutpbs.push([timeNow, outbps]);
+                if (dataOutpbs.length > 180){
+                    dataOutpbs.shift();
+                }
+
+                try {
+                    window.localStorage['Inbps'] = JSON.stringify(dataInpbs);
+                    window.localStorage['Outbps'] = JSON.stringify(dataOutpbs);
+                } catch (exception) { }
+        };
+  
+        function getLocalStorage(key) {
+            try {
+                return JSON.parse(window.localStorage[key]);
+            } catch (exception) { }
+        };
+
+        $scope.chart = function(){
+            Highcharts.stockChart('container1', {
+                chart: {
+                    events: {
+                        load: function () {
+                            var series = this.series[0];
+                            setInterval(function () {
+                            var lastitem = getLocalStorage('Inbps')[getLocalStorage('Inbps').length - 1];
+                            series.addPoint(lastitem, true, true);
+                            }, 10000);
+                        }
+                    }
+                },
+
+                time: {
+                    useUTC: false
+                },
+
+                rangeSelector: {
+                    buttons: [{
+                        count: 1,
+                        type: 'minute',
+                        text: '1M'
+                    }, {
+                        count: 5,
+                        type: 'minute',
+                        text: '5M'
+                    }, {
+                        type: 'all',
+                        text: 'All'
+                    }],
+                    inputEnabled: false,
+                    selected: 1
+                },
+                title: {
+                    text: 'Download Rate',
+                    style: {
+                        fontSize: "16px"
+                    }
+                },
+                credits: {
+                    enabled: false
+                },
+                yAxis: {
+                    labels: {
+                        formatter: function(){ return this.value / 1000000 + "Mbps"},                 
+                    },
+                    min: 0,
+                    endOnTick: false
+                  },
+                exporting: {
+                    enabled: false
+                },
+                series: [{
+                    data: (function () {
+                        var data = [];
+                        if (getLocalStorage('Inbps')){
+                            data = getLocalStorage('Inbps');
+                        }         
+                        var dataLenght = data.length;
+                        if ( dataLenght < 180){
+                            var z = -180 + dataLenght;
+                            var time = (new Date()).getTime(),
+                            i;
+                            for (i = z; i <= 0; i += 1) {
+                                data.unshift([
+                                    time + i * 10000,
+                                    0
+                                ]);
+                            }
+                        }
+                        return data.sort();
+                    }())
+                }]
+            });
+
+            Highcharts.stockChart('container2', {
+                chart: {
+                    events: {
+                        load: function () {
+                            // Set up the updating of the chart each second
+                            var series = this.series[0];
+                            setInterval(function () {
+                            var lastitem = getLocalStorage('Outbps')[getLocalStorage('Outbps').length - 1];
+                            series.addPoint(lastitem, true, true);
+                            }, 10000);
+                        }
+                    }
+                },
+                time: {
+                    useUTC: false
+                },
+                credits: {
+                    enabled: false
+                },
+                rangeSelector: {
+                    buttons: [{
+                        count: 1,
+                        type: 'minute',
+                        text: '1M'
+                    }, {
+                        count: 5,
+                        type: 'minute',
+                        text: '5M'
+                    }, {
+                        type: 'all',
+                        text: 'All'
+                    }],
+                    inputEnabled: false,
+                    selected: 1
+                },
+                title: {
+                    text: 'Upload Rate',
+                    style: {
+                        fontSize: "16px"
+                    }
+                },
+                yAxis: {
+                    labels: {
+                      formatter: function(){ return this.value / 1000000 + "Mbps"},
+                    },
+                    min: 0,
+                    endOnTick: false
+                  },
+                exporting: {
+                    enabled: false
+                },
+                series: [{
+                    data: (function () {
+                        var data = [];
+                        if (getLocalStorage('Outbps')){
+                            data = getLocalStorage('Outbps');
+                        }                    
+                        var dataLenght = data.length;
+                        if ( dataLenght < 180){
+                            var z = -180 + dataLenght;
+                            var time = (new Date()).getTime(),
+                            i;
+                            for (i = z; i <= 0; i += 1) {
+                                data.unshift([
+                                    time + i * 10000,
+                                    0
+                                ]);
+                            }
+                        }
+                        return data.sort();
+                    }())
+                }]
+            });
+
+            Highcharts.chart('container4', {          
+                chart: {
+                    type: 'bar',
+                    events: {
+                        load: function () {
+                            var categories = this.xAxis[0];
+                            var series = []; 
+                                for (var i = 0; i < this.series.length; i++){
+                                    series[i] = this.series[i];
+                                }; 
+                            setInterval(function () {                              
+                                var ser = getLocalStorage('series');                         
+                                var cat = getLocalStorage('keys');
+                                categories.setCategories(cat, true);
+                                for (var i = 0; i < ser.length; i++){            
+                                    series[i].setName(ser[i].name, true);
+                                    series[i].setData(ser[i].data, true, true); 
+                               }
+                            }, 2000);
+                        }
+                    }
+                },
+                title: {
+                    text: 'Info per Folder',
+                    style: {
+                        fontSize: "16px"
+                    }
+                },            
+                legend: {
+                    layout: 'vertical',
+                    align: 'right',
+                    verticalAlign: 'top',
+                    x: -40,
+                    y: 80,
+                    floating: true,
+                    borderWidth: 2,
+                    backgroundColor: ((Highcharts.theme && Highcharts.theme.legendBackgroundColor) || '#FFFFFF'),
+                    shadow: true
+                },
+                credits: {
+                    enabled: false
+                },
+                series: getLocalStorage('series'),          
+                plotOptions: {
+                    bar: {
+                        dataLabels: {
+                            enabled: true
+                        }
+                    }
+                },     
+                xAxis: {
+                    categories: getLocalStorage('keys'),
+                    labels: {
+                        x: -10,
+                        style: {
+                            fontSize: '12px'
+                        }
+                    }
+                },            
+                yAxis: {                    
+                    title: false,
+                }
+            });
+
+            Highcharts.chart('container3', {
+                chart: {
+                    events: {
+                        load: function () {
+                            var series = this.series[0];
+                            setInterval(function () {
+                            var lastitem = getLocalStorage("RemDev");
+                            series.setData(lastitem, true);
+                            }, 5000);
+                        }
+                    }
+                },        
+                title: {
+                    text: 'Shared Folders Per Remote Device',
+                    style: {
+                        fontSize: "16px"
+                    }
+                },
+                credits: {
+                    enabled: false
+                },
+                series: [{
+                    type: "sunburst",
+                    data: getLocalStorage("RemDev"),
+                    levels: [{
+                        level: 1,
+                        levelIsConstant: false,
+                        dataLabels: {
+                            filter: {
+                                property: 'outerArcLength',
+                                operator: '>',
+                                value: 1
+                            }
+                        }
+                    }, {
+                        level: 2,
+                        colorByPoint: true
+                    },
+                    {
+                        level: 3,
+                        colorVariation: {
+                            key: 'brightness',
+                            to: -0.5
+                        }
+                    }, {
+                        level: 4,
+                        colorVariation: {
+                            key: 'brightness',
+                            to: 0.5
+                        }
+                    }]
+                }],
+            });
         };
     });
